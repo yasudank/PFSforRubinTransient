@@ -275,20 +275,21 @@ def classify_sources(
         f"per-night-band ({per_night_band}) deduplication"
     )
 
-    # 2. Ensure cutouts are cached locally (reuse local fink2 cutouts or download via Fink API)
-    cutout_stats = ensure_cutouts_cached(
+    # 2. Ensure Difference FITS cutouts are cached for Step 1
+    cutout_stats_s1 = ensure_cutouts_cached(
         src,
         cache_path,
+        image_types=("difference",),
         extra_fits_roots=extra_fits_roots,
         workers=download_workers,
         base_url=fink_base_url,
     )
     print(
-        f"[2] Cutouts ready: cached={cutout_stats['already_cached']}, "
-        f"linked_local={cutout_stats['linked_local']}, "
-        f"downloaded={cutout_stats['downloaded']}, failed={cutout_stats['failed']}"
+        f"[2] Step 1 cutouts (difference): cached={cutout_stats_s1['already_cached']}, "
+        f"linked_local={cutout_stats_s1['linked_local']}, "
+        f"downloaded={cutout_stats_s1['downloaded']}, failed={cutout_stats_s1['failed']}"
     )
-    info["cutout_stats"] = cutout_stats
+    info["cutout_stats_step1"] = cutout_stats_s1
 
     fits_root_str = str(cache_path)
 
@@ -313,6 +314,24 @@ def classify_sources(
     src["s1_decision"] = decide(P1, S1_CLASSES, B["step1"]["thresholds"])
     src.loc[~has_cut, "s1_decision"] = "no_cutout"
     print(f"[3] Step 1: {src['s1_decision'].value_counts().to_dict()}")
+
+    # 3b. Ensure multi-HDU Science + Template FITS (with UNCERT/PSFIMAGE) for Step 1 survivors
+    s1_survivors = src[src["s1_decision"].isin(["positive_real", "negative_real", "uncertain"])]
+    if len(s1_survivors):
+        cutout_stats_s2 = ensure_cutouts_cached(
+            s1_survivors,
+            cache_path,
+            image_types=("science", "template"),
+            extra_fits_roots=extra_fits_roots,
+            workers=download_workers,
+            base_url=fink_base_url,
+        )
+        print(
+            f"[3b] Step 2 cutouts (science+template FITS): cached={cutout_stats_s2['already_cached']}, "
+            f"linked_local={cutout_stats_s2['linked_local']}, "
+            f"downloaded={cutout_stats_s2['downloaded']}, failed={cutout_stats_s2['failed']}"
+        )
+        info["cutout_stats_step2"] = cutout_stats_s2
 
     # 4. Visit quality check
     vchk = check_visits(src, fits_root_str, B["visit_check"])

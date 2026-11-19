@@ -67,11 +67,15 @@ SOURCES_PIPELINE_COLUMNS: list[str] = [
     "r:psfFluxErr",
 ]
 
-_CUTOUT_KEY_MAP = {
-    "difference": "b:cutoutDifference",
-    "science": "b:cutoutScience",
-    "template": "b:cutoutTemplate",
+_CUTOUT_KIND_MAP = {
+    "difference": "Difference",
+    "science": "Science",
+    "template": "Template",
 }
+
+# Single-HDU 30x30 float32 FITS is 5760 bytes; multi-HDU LSST cutouts (with UNCERT/MASKPLANE/PSFIMAGE)
+# are ~30-40 KB. Checking >= 10000 bytes detects legacy single-HDU cache files cheaply.
+_MIN_MULTI_HDU_FITS_BYTES = 10000
 
 _DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -113,8 +117,8 @@ class FinkLSSTClient:
         self,
         base_url: str = FINK_LSST_API_URL,
         timeout: float = 120.0,
-        max_retries: int = 3,
-        retry_backoff: float = 2.0,
+        max_retries: int = 5,
+        retry_backoff: float = 3.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
@@ -294,47 +298,79 @@ class FinkLSSTClient:
         df = df.drop_duplicates("diaSourceId").reset_index(drop=True)
         return df[plain_cols]
 
-    def fetch_cutouts_all(self, dia_source_id: int | str) -> dict[str, np.ndarray]:
-        """Fetch Science, Template, and Difference 30x30 arrays in one API call."""
+    def fetch_cutout_fits(self, dia_source_id: int | str, image_type: str) -> bytes:
+        """Fetch a full multi-HDU FITS cutout (PRIMARY, UNCERT, MASKPLANE, PSFIMAGE)."""
+        kind = _CUTOUT_KIND_MAP[image_type]
+        url = f"{self.base_url}/api/v1/cutouts"
         payload = {
             "diaSourceId": str(int(dia_source_id)),
-            "kind": "All",
-            "output-format": "array",
+            "kind": kind,
+            "output-format": "FITS",
         }
-        data = self._post_json_raw("/api/v1/cutouts", payload)
-        if not isinstance(data, dict):
+        last_exc: Exception | None = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                resp = self.session.post(url, json=payload, timeout=self.timeout)
+            except requests.RequestException as exc:
+                last_exc = exc
+                if attempt < self.max_retries:
+                    time.sleep(self.retry_backoff * attempt)
+                    continue
+                raise FinkAPIError(f"Cutout request failed: {exc}") from exc
+
+            if resp.status_code == 200 and resp.content.startswith(b"SIMPLE"):
+                return resp.content
+
+            if resp.status_code >= 500 and attempt < self.max_retries:
+                time.sleep(self.retry_backoff * attempt)
+                continue
+
             raise FinkAPIError(
-                f"Unexpected cutouts response for diaSourceId={dia_source_id}: {type(data)}"
+                f"Fink API /api/v1/cutouts ({kind}) returned HTTP {resp.status_code}: "
+                f"{resp.text[:200].strip()}"
             )
-        out: dict[str, np.ndarray] = {}
-        for img_type, key in _CUTOUT_KEY_MAP.items():
-            if key in data and data[key] is not None:
-                out[img_type] = np.asarray(data[key], dtype=np.float32)
-        return out
+
+        raise FinkAPIError(f"Cutout request failed after {self.max_retries} attempts: {last_exc}")
+
+
+def _is_valid_cached_fits(path: str, image_type: str) -> bool:
+    if not os.path.exists(path):
+        return False
+    if image_type in ("science", "template"):
+        # Require full multi-HDU FITS (with UNCERT and PSFIMAGE) for host_morphology
+        try:
+            return os.path.getsize(path) >= _MIN_MULTI_HDU_FITS_BYTES
+        except OSError:
+            return False
+    return True
 
 
 def ensure_cutouts_cached(
     src_df: pd.DataFrame,
     cache_root: str | Path,
     *,
+    image_types: Sequence[str] = ("difference", "science", "template"),
     extra_fits_roots: Sequence[str | Path] = (),
     workers: int = 8,
     base_url: str = FINK_LSST_API_URL,
     timeout: float = 60.0,
 ) -> dict[str, int]:
-    """Ensure Science/Template/Difference FITS cutouts exist in ``cache_root``.
+    """Ensure full multi-HDU FITS cutouts exist in ``cache_root``.
 
     Uses the exact directory layout of ``stamp_classifier.dataset.get_cutout_path``.
     Reuses existing files in ``cache_root`` or symlinks from ``extra_fits_roots``
-    before downloading missing cutouts in parallel from Fink ``/api/v1/cutouts``.
+    before downloading missing cutouts in parallel from Fink ``/api/v1/cutouts``
+    with ``output-format=FITS`` (preserving ``UNCERT``, ``MASKPLANE``, ``PSFIMAGE``).
     """
+    import shutil
     from stamp_classifier.dataset import get_cutout_path
 
     cache_root_str = str(cache_root)
     extra_roots = [str(r) for r in extra_fits_roots if r and os.path.isdir(str(r))]
+    req_types = tuple(image_types)
 
     stats = {"already_cached": 0, "linked_local": 0, "downloaded": 0, "failed": 0}
-    to_download: list[tuple[int, float, str, int]] = []
+    to_download: list[tuple[int, float, str, int, tuple[str, ...]]] = []
     seen_sids: set[int] = set()
 
     for row in src_df.itertuples():
@@ -348,66 +384,70 @@ def ensure_cutouts_cached(
 
         dst_paths = {
             itype: get_cutout_path(cache_root_str, oid, mjd, band, sid, itype)
-            for itype in _CUTOUT_KEY_MAP
+            for itype in req_types
         }
-        if all(os.path.exists(p) for p in dst_paths.values()):
+        missing = [itype for itype in req_types if not _is_valid_cached_fits(dst_paths[itype], itype)]
+        if not missing:
             stats["already_cached"] += 1
             continue
 
         # Check local extra_fits_roots (e.g. /mnt/ugnas/work/LSST/fink2/cutouts)
-        linked = False
-        for eroot in extra_roots:
-            src_paths = {
-                itype: get_cutout_path(eroot, oid, mjd, band, sid, itype)
-                for itype in _CUTOUT_KEY_MAP
-            }
-            if all(os.path.exists(p) for p in src_paths.values()):
-                os.makedirs(os.path.dirname(next(iter(dst_paths.values()))), exist_ok=True)
-                for itype, sp in src_paths.items():
-                    dp = dst_paths[itype]
-                    if not os.path.exists(dp):
-                        try:
-                            os.symlink(os.path.abspath(sp), dp)
-                        except OSError:
-                            import shutil
-                            shutil.copy2(sp, dp)
-                stats["linked_local"] += 1
-                linked = True
-                break
+        still_missing: list[str] = []
+        linked_any = False
+        for itype in missing:
+            dp = dst_paths[itype]
+            found_local = False
+            for eroot in extra_roots:
+                sp = get_cutout_path(eroot, oid, mjd, band, sid, itype)
+                if _is_valid_cached_fits(sp, itype):
+                    os.makedirs(os.path.dirname(dp), exist_ok=True)
+                    if os.path.lexists(dp):
+                        os.unlink(dp)
+                    try:
+                        os.symlink(os.path.abspath(sp), dp)
+                    except OSError:
+                        shutil.copy2(sp, dp)
+                    linked_any = True
+                    found_local = True
+                    break
+            if not found_local:
+                still_missing.append(itype)
 
-        if not linked:
-            to_download.append((oid, mjd, band, sid))
+        if not still_missing:
+            stats["linked_local"] += 1
+        else:
+            if linked_any:
+                stats["linked_local"] += 1
+            to_download.append((oid, mjd, band, sid, tuple(still_missing)))
 
     if not to_download:
         return stats
 
-    def _download_one(item: tuple[int, float, str, int]) -> bool:
-        oid, mjd, band, sid = item
-        client = FinkLSSTClient(base_url=base_url, timeout=timeout, max_retries=3)
-        try:
-            arrays = client.fetch_cutouts_all(sid)
-        except Exception:
-            return False
-        if not all(k in arrays for k in _CUTOUT_KEY_MAP):
-            return False
-
-        out_dir = os.path.dirname(
-            get_cutout_path(cache_root_str, oid, mjd, band, sid, "difference")
-        )
-        os.makedirs(out_dir, exist_ok=True)
-        for itype, arr in arrays.items():
+    def _download_one(item: tuple[int, float, str, int, tuple[str, ...]]) -> bool:
+        oid, mjd, band, sid, missing_types = item
+        client = FinkLSSTClient(base_url=base_url, timeout=timeout, max_retries=5, retry_backoff=3.0)
+        ok = True
+        for itype in missing_types:
+            try:
+                fits_bytes = client.fetch_cutout_fits(sid, itype)
+            except Exception:
+                ok = False
+                continue
             dst = get_cutout_path(cache_root_str, oid, mjd, band, sid, itype)
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
             tmp = f"{dst}.tmp.{os.getpid()}"
-            fits.PrimaryHDU(arr.astype(np.float32)).writeto(tmp, overwrite=True)
+            with open(tmp, "wb") as f:
+                f.write(fits_bytes)
             os.replace(tmp, dst)
-        return True
+        return ok
 
+    label = "+".join(req_types)
     with ThreadPoolExecutor(max_workers=max(1, int(workers))) as ex:
         futures = [ex.submit(_download_one, item) for item in to_download]
         for fut in tqdm(
             as_completed(futures),
             total=len(futures),
-            desc="Downloading Fink cutouts",
+            desc=f"Downloading Fink FITS ({label})",
         ):
             if fut.result():
                 stats["downloaded"] += 1
