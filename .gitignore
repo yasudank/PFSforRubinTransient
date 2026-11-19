@@ -9,3 +9,7 @@ wheels/
 # Virtual environments
 .venv
 .venv-*
+
+# Local caches and run outputs
+cache/
+sn_output/

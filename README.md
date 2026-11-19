@@ -1,47 +1,65 @@
-# RubinTransient
+# RubinTransient (`PFSforRubinTransient`)
 
-Subaru/PFS の `pfsDesign` FITS ファイルの視野内にある Rubin/LSST transient を [Fink/LSST object API](https://api.lsst.fink-portal.org/) から検索するツールです。
+Subaru/PFS の `pfsDesign` FITS ファイルの視野内にある Rubin/LSST transient を [Fink/LSST object API](https://api.lsst.fink-portal.org/) から検索し、`SKY` ファイバーのコブラ到達判定および [RubinTargetSelection](https://github.com/yasudank/RubinTargetSelection) (`stamp_classifier`) による超新星候補選定を行うツールです。
 
 ## セットアップ (`uv`)
 
 `UV_PROJECT_ENVIRONMENT=.venv-$(uname -m)` の設定に従って仮想環境が作成されます。
-`pfsDesign` ファイルの読み書きには Subaru PFS Project の `pfs-datamodel` (`Subaru-PFS/datamodel@w.2026.39`) を使用しています。
+`pfsDesign` 処理・コブラ到達判定には Subaru PFS Project のモジュール（`pfs-datamodel`, `pfs-utils`, `pfs-instdata`, `ics-cobraCharmer`, `ics-cobraOps`）、超新星分類には GitHub の `yasudank/RubinTargetSelection` を使用しています。
 
 ```bash
 uv sync
 ```
 
-## 第1段階: `pfsDesign` 視野内の transient 取得
+### PFS ソフトウェアバージョンの更新 (`update-pfs-env`)
 
-単一の `pfsDesign` ファイル、複数ファイル、またはディレクトリを指定して実行できます。
+`NetflowByUser` の `config_2026Nov.yaml` のような設定ファイル（`pfs:` セクション）から Subaru PFS モジュールのバージョンを解決し、`pyproject.toml` と `uv` 仮想環境を一括更新できます。
 
 ```bash
-# 単一ファイルを検索して CSV に保存
-uv run find-transients \
-  /mnt/ugnas/work/PFS/spt_ssp_observation/runs/2026-11/pfs_designs/CO/pfsDesign-0x0ba54120d2be15a4.fits \
-  --start 2026-11-01 --stop 2026-11-19 \
-  -o transients.csv
+# 変更内容の事前確認 (--dry-run)
+uv run update-pfs-env /mnt/ugnas/work/PFS/galuda/NetflowByUser/config_2026Nov.yaml --dry-run
 
-# ディレクトリ内の全 pfsDesign をスキャン（SSO 除外、サマリーも出力）
-uv run find-transients \
-  /mnt/ugnas/work/PFS/spt_ssp_observation/runs/2026-11/pfs_designs/CO \
-  --start 2026-11-01 --stop 2026-11-19 \
-  --exclude-sso \
-  -o transients_co.csv \
-  --summary-output summary_co.csv
+# pyproject.toml 更新 + uv sync 実行
+uv run update-pfs-env /mnt/ugnas/work/PFS/galuda/NetflowByUser/config_2026Nov.yaml
+
+# >= 指定の最新タグではなく下限タグそのもの (例: w.2026.39) に固定する場合
+uv run update-pfs-env /mnt/ugnas/work/PFS/galuda/NetflowByUser/config_2026Nov.yaml --exact-floor
 ```
 
-`uv run python find_transients.py ...` でも同様に実行できます。
+## 第1段階: `pfsDesign` 視野内の transient 取得 (`find-transients`)
 
-### 主なオプション
+```bash
+# 単一ファイルを検索（--sky-reachable を付けると SKY コブラ到達可能天体のみに絞り込み）
+uv run find-transients \
+  /mnt/ugnas/work/PFS/spt_ssp_observation/runs/2026-11/pfs_designs/CO/pfsDesign-0x29ef57d63c7e0d25.fits \
+  --start 2026-11-01 --stop 2026-11-19 \
+  --exclude-sso --sky-reachable \
+  -o transients.csv
+```
 
-- `--start` / `--startdate`: 検索開始日時 (UTC: `YYYY-MM-DD`, `YYYY-MM-DD HH:MM:SS`, MJD, JD)
-- `--stop` / `--stopdate`: 検索終了日時 (UTC。日付のみの場合は当日 `23:59:59` まで含む。省略時は現在時刻)
-- `--window`: `--start` からの日数 (`--stop` の代わりに使用)
-- `--kind`: `across` (既定: 期間中に観測された全天体) / `within` (初回・最終検出とも期間内の天体のみ)
-- `--fov-margin`: ファイバー凸包からの外向きマージン（秒角、既定 `100.0` ≈ コブラ可動範囲）
-- `--radius`: コーンサーチ半径（秒角）を手動指定（既定: 最外周ファイバー + `--fov-margin`）
-- `--cone-only`: 六角形視野判定を行わず、コーン内すべてを出力
-- `--exclude-sso`: 既知太陽系天体 (`f:is_sso == True`) を除外
-- `--columns` / `--all-columns`: 取得する Fink カラムを指定（既定は厳選28カラム + AB 等級 `psf_mag`, `science_mag`）
+## 第2段階: SKY ファイバー到達可能天体の超新星候補選定 (`select-sn-targets`)
 
+以下の順で PostgreSQL DB を使わずにオンデマンド処理を行います：
+
+1. `pfsDesign` の六角形視野内を Fink `/api/v1/conesearch` で検索（非 SSO）
+2. `pfs_utils` / `ics_cobraOps` / `pfs_instdata` で **GOOD な SKY ファイバーのコブラ可動範囲内かつブラックドット外** の天体に絞り込み
+3. Fink `/api/v1/sources` で全検出履歴を取得し、**2 晩以上観測されている天体** (`--min-nights 2` が既定) に限定
+4. Fink `/api/v1/cutouts` から 30×30 の Science / Template / Difference カットアウトを並列取得してローカルキャッシュ（既存の `/mnt/ugnas/work/LSST/fink2/cutouts` があればシンボリックリンクで再利用）
+5. `RubinTargetSelection` (`stamp_classifier`) の固定モデルバンドル (`snp_v1`) で Step 1 / moving 判定 / Step 2 分類を実行し、`design_sn_candidates.csv`, `candidates.csv`, `candidates.pdf` 等を出力
+
+```bash
+uv run select-sn-targets \
+  /mnt/ugnas/work/PFS/spt_ssp_observation/runs/2026-11/pfs_designs/CO/pfsDesign-0x29ef57d63c7e0d25.fits \
+  --start 2026-11-01 --stop 2026-11-19 \
+  -o sn_output/run1
+```
+
+### 主なオプション (`select-sn-targets`)
+- `--start` / `--stop`: 検索期間 (UTC)
+- `--min-nights`: 最小観測夜数（既定 `2`）
+- `--bundle-dir`: 固定モデルバンドルのパス（既定 `/mnt/ugnas/work/LSST/fink2/models/sn_pipeline/snp_v1`）
+- `--cache-dir`: カットアウトのローカルキャッシュ先（既定 `cache/cutouts`）
+- `--local-cutouts`: 既存ローカルカットアウト（既定 `/mnt/ugnas/work/LSST/fink2/cutouts`、空文字で無効化）
+- `--obstime`: sky→PFI 座標変換に使う観測時刻 (UTC ISO)
+- `--strict`: Step 2 が `uncertain` の天体を除外
+- `--no-pdf`: `candidates.pdf` の生成をスキップ

@@ -1,19 +1,43 @@
 [project]
 name = "rubintransient"
 version = "0.1.0"
-description = "Search Rubin/LSST transients in Subaru/PFS pfsDesign fields of view via Fink/LSST API"
+description = "Search and classify Rubin/LSST transients in Subaru/PFS pfsDesign fields of view via Fink/LSST API"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "astropy>=8.0.3",
     "numpy>=2.5.5",
     "pandas>=3.1.1",
-    "pfs-datamodel",
     "requests>=2.34.2",
+    "pfs-datamodel",
+    "pfs-utils",
+    "pfs-instdata",
+    "ics-cobracharmer",
+    "ics-cobraops",
+    "rubin-target-selection",
 ]
 
 [project.scripts]
 find-transients = "rubin_transient.cli:main"
+select-sn-targets = "rubin_transient.cli:select_sn_main"
+update-pfs-env = "rubin_transient.update_pfs_env:main"
+
+[tool.uv.sources]
+pfs-datamodel = { git = "https://github.com/Subaru-PFS/datamodel.git", tag = "w.2026.39" }
+pfs-utils = { git = "https://github.com/Subaru-PFS/pfs_utils.git", tag = "w.2026.39" }
+pfs-instdata = { git = "https://github.com/Subaru-PFS/pfs_instdata.git", tag = "1.8.97" }
+ics-cobracharmer = { git = "https://github.com/Subaru-PFS/ics_cobraCharmer.git", tag = "1.5.12" }
+ics-cobraops = { git = "https://github.com/Subaru-PFS/ics_cobraOps.git", tag = "v2.0.9" }
+rubin-target-selection = { git = "https://github.com/yasudank/RubinTargetSelection.git", branch = "master" }
+
+[tool.uv]
+override-dependencies = [
+    "pfs-datamodel @ git+https://github.com/Subaru-PFS/datamodel.git@w.2026.39",
+    "pfs-utils @ git+https://github.com/Subaru-PFS/pfs_utils.git@w.2026.39",
+    "pfs-instdata @ git+https://github.com/Subaru-PFS/pfs_instdata.git@1.8.97",
+    "ics-cobracharmer @ git+https://github.com/Subaru-PFS/ics_cobraCharmer.git@1.5.12",
+    "pyqt5 ; python_version < '0'",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -21,6 +45,3 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["rubin_transient"]
-
-[tool.uv.sources]
-pfs-datamodel = { git = "https://github.com/Subaru-PFS/datamodel.git", rev = "w.2026.39" }
