@@ -7,12 +7,14 @@ from .fink_client import (
     ensure_cutouts_cached,
 )
 from .pfs_design import PfsDesignInfo, discover_pfs_designs, load_pfs_design
+from .reassign_design import build_modified_pfs_design, reassign_design_file
 from .sn_classifier import classify_sources, load_bundle_dir
 
 __all__ = [
     "DEFAULT_CONESEARCH_COLUMNS",
     "FinkLSSTClient",
     "PfsDesignInfo",
+    "build_modified_pfs_design",
     "check_sky_fiber_reachability",
     "classify_sources",
     "discover_pfs_designs",
@@ -20,5 +22,6 @@ __all__ = [
     "get_bench",
     "load_bundle_dir",
     "load_pfs_design",
+    "reassign_design_file",
     "sky_to_pfi",
 ]

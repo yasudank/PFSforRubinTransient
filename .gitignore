@@ -13,3 +13,4 @@ wheels/
 # Local caches and run outputs
 cache/
 sn_output/
+modified_designs/

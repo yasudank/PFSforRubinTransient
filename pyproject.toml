@@ -20,6 +20,7 @@ dependencies = [
 [project.scripts]
 find-transients = "rubin_transient.cli:main"
 select-sn-targets = "rubin_transient.cli:select_sn_main"
+reassign-pfs-design = "rubin_transient.reassign_design:main"
 update-pfs-env = "rubin_transient.update_pfs_env:main"
 
 [tool.uv.sources]
