@@ -22,10 +22,33 @@ from .cobra_reachability import (
 
 DEFAULT_FIDUCIAL_AVOID_MM = 2.9
 DEFAULT_MIN_COBRA_SEP_MM = 2.1
-DEFAULT_PROPOSAL_ID = "S26B-047"
-DEFAULT_CAT_ID = 10099
+DEFAULT_PROPOSAL_ID: str | None = None
+DEFAULT_CAT_ID: int | None = None
 DEFAULT_OB_PREFIX = "rubin_"
 DEFAULT_NAME_SUFFIX = "_sn"
+
+
+def _infer_science_metadata(orig: PfsDesign) -> tuple[int, str]:
+    """Infer dominant (catId, proposalId) from SCIENCE fibers in ``orig``."""
+    sci = np.asarray(orig.targetType, dtype=int) == int(TargetType.SCIENCE)
+
+    cat_id = 10099
+    if np.any(sci):
+        sci_cats = np.asarray(orig.catId[sci], dtype=int)
+        sci_cats = sci_cats[sci_cats > 0]
+        if len(sci_cats) > 0:
+            vals, counts = np.unique(sci_cats, return_counts=True)
+            cat_id = int(vals[np.argmax(counts)])
+
+    proposal_id = "N/A"
+    if np.any(sci):
+        sci_props = [str(p).strip() for p in orig.proposalId[sci]]
+        sci_props = [p for p in sci_props if p and p.upper() != "N/A"]
+        if sci_props:
+            vals, counts = np.unique(sci_props, return_counts=True)
+            proposal_id = str(vals[np.argmax(counts)])
+
+    return cat_id, proposal_id
 
 HSC_FILTER_NAMES = ["g_hsc", "r2_hsc", "i2_hsc", "z_hsc", "y_hsc"]
 LSST_BANDS = ["g", "r", "i", "z", "y"]
@@ -99,12 +122,15 @@ def build_modified_pfs_design(
     orig: PfsDesign,
     assignments: list[dict],
     *,
-    proposal_id: str = DEFAULT_PROPOSAL_ID,
-    cat_id: int = DEFAULT_CAT_ID,
+    proposal_id: str | None = DEFAULT_PROPOSAL_ID,
+    cat_id: int | None = DEFAULT_CAT_ID,
     ob_prefix: str = DEFAULT_OB_PREFIX,
     name_suffix: str = DEFAULT_NAME_SUFFIX,
 ) -> PfsDesign:
     """Create a new PfsDesign with selected SKY fibers reassigned to SN candidates."""
+    inferred_cat_id, inferred_proposal_id = _infer_science_metadata(orig)
+    eff_cat_id = int(cat_id) if cat_id is not None else inferred_cat_id
+    eff_proposal_id = str(proposal_id) if proposal_id is not None else inferred_proposal_id
     fiberId = np.array(orig.fiberId, copy=True)
     cobraId = np.array(orig.cobraId, copy=True) if getattr(orig, "cobraId", None) is not None else None
     tract = np.array(orig.tract, copy=True)
@@ -141,7 +167,7 @@ def build_modified_pfs_design(
         pfiNominal[idx, 0] = float(a["pfi_x_mm"])
         pfiNominal[idx, 1] = float(a["pfi_y_mm"])
         targetType[idx] = int(TargetType.SCIENCE)
-        catId[idx] = int(cat_id)
+        catId[idx] = eff_cat_id
         objId[idx] = oid
         tract[idx] = 1
         patch[idx] = "1,1"
@@ -149,7 +175,7 @@ def build_modified_pfs_design(
         pmRa[idx] = 0.0
         pmDec[idx] = 0.0
         parallax[idx] = 1e-7
-        proposal_list[idx] = str(proposal_id)
+        proposal_list[idx] = eff_proposal_id
         obcode_list[idx] = f"{ob_prefix}{oid}"[:30]
 
         flux_vals = np.array([float(a.get(f"scienceFlux_{b}", np.nan)) for b in LSST_BANDS], dtype=float)
@@ -218,8 +244,8 @@ def reassign_design_file(
     *,
     bench=None,
     out_dir: str | Path | None = None,
-    proposal_id: str = DEFAULT_PROPOSAL_ID,
-    cat_id: int = DEFAULT_CAT_ID,
+    proposal_id: str | None = DEFAULT_PROPOSAL_ID,
+    cat_id: int | None = DEFAULT_CAT_ID,
     ob_prefix: str = DEFAULT_OB_PREFIX,
     name_suffix: str = DEFAULT_NAME_SUFFIX,
     obs_time: str | None = None,
@@ -524,13 +550,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--proposal-id",
         default=DEFAULT_PROPOSAL_ID,
-        help=f"Proposal ID for reassigned SN targets (default: {DEFAULT_PROPOSAL_ID}).",
+        help="Override proposalId for reassigned SN targets (default: inherit from original SCIENCE fibers).",
     )
     parser.add_argument(
         "--cat-id",
         type=int,
         default=DEFAULT_CAT_ID,
-        help=f"catId for reassigned SN targets (default: {DEFAULT_CAT_ID}).",
+        help="Override catId for reassigned SN targets (default: inherit from original SCIENCE fibers).",
     )
     parser.add_argument(
         "--ob-prefix",
