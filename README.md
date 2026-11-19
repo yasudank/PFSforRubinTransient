@@ -62,4 +62,5 @@ uv run select-sn-targets \
 - `--local-cutouts`: 既存ローカルカットアウト（既定 `/mnt/ugnas/work/LSST/fink2/cutouts`、空文字で無効化）
 - `--obstime`: sky→PFI 座標変換に使う観測時刻 (UTC ISO)
 - `--strict`: Step 2 が `uncertain` の天体を除外
+- `--include-negative-galaxy`: Step 1 が `negative_real` かつ Step 2 が `galaxy` の天体も含める（既定は除外）
 - `--no-pdf`: `candidates.pdf` の生成をスキップ

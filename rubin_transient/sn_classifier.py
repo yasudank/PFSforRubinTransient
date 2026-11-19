@@ -157,7 +157,7 @@ def classify_sources(
     min_nights: int = 2,
     min_nights_no_host: int = 2,
     include_uncertain: bool = True,
-    include_negative_galaxy: bool = True,
+    include_negative_galaxy: bool = False,
     keep_suspicious_visits: bool = False,
     per_night_band: str = "snr",
     download_workers: int = 8,

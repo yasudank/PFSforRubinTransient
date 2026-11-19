@@ -442,9 +442,9 @@ def build_select_sn_parser() -> argparse.ArgumentParser:
         help="Exclude step2 'uncertain' objects from SN candidates.",
     )
     parser.add_argument(
-        "--no-negative-galaxy",
+        "--include-negative-galaxy",
         action="store_true",
-        help="Exclude (negative_real & galaxy) objects from SN candidates.",
+        help="Include (negative_real & galaxy) objects in SN candidates (excluded by default).",
     )
     parser.add_argument(
         "--keep-suspicious-visits",
@@ -619,7 +619,7 @@ def select_sn_main(argv: list[str] | None = None) -> int:
         min_nights=args.min_nights,
         min_nights_no_host=args.min_nights_no_host,
         include_uncertain=not args.strict,
-        include_negative_galaxy=not args.no_negative_galaxy,
+        include_negative_galaxy=args.include_negative_galaxy,
         keep_suspicious_visits=args.keep_suspicious_visits,
         per_night_band=args.per_night_band,
         download_workers=args.download_workers,
