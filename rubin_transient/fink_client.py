@@ -391,7 +391,7 @@ def ensure_cutouts_cached(
             stats["already_cached"] += 1
             continue
 
-        # Check local extra_fits_roots (e.g. /mnt/ugnas/work/LSST/fink2/cutouts)
+        # Check local extra_fits_roots (optional existing cutout directory)
         still_missing: list[str] = []
         linked_any = False
         for itype in missing:

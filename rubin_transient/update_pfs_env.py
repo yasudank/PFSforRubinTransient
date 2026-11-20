@@ -198,7 +198,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "config_yaml",
-        help="Path to PFS config YAML file (e.g. /mnt/ugnas/work/PFS/galuda/NetflowByUser/config_2026Nov.yaml).",
+        help="Path to PFS config YAML file (e.g. config.yaml).",
     )
     parser.add_argument(
         "--pyproject",
