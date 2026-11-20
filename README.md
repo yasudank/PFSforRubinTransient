@@ -1,5 +1,7 @@
 # RubinTransient (`PFSforRubinTransient`)
 
+[English](README_EN.md)
+
 Subaru/PFS の `pfsDesign` FITS ファイルの視野内にある Rubin/LSST transient を [Fink/LSST object API](https://api.lsst.fink-portal.org/) から検索し、`SKY` ファイバーのコブラ到達判定・[RubinTargetSelection](https://github.com/yasudank/RubinTargetSelection) (`stamp_classifier`) による超新星候補選定・衝突回避チェック付きのファイバー再割り当てを行うツールです。
 
 ## セットアップ (`uv`)
