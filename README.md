@@ -70,6 +70,7 @@ uv run select-sn-targets \
 `select-sn-targets` が出力した `design_sn_candidates.csv` を読み込み、各 `pfsDesign` について以下の安全チェックを通過した SN 候補だけを `SKY` ファイバーへ再割り当てし、新しい `pfsDesign-0x....fits`（`variant` インクリメント、`designId0` に元 ID 記録、`calculate_pfsDesignId` で ID 再計算）を出力します。
 
 - コブラ可動範囲（`rMin <= r <= rMax`）およびブラックドット回避（`margin=1.65`）
+- 明るさ制限（バンドにかかわらず最新観測の AB 等級が `--min-mag` 以下は除外、既定 `18.0` 等）
 - Fiducial 回避（`>= 2.9 mm`）
 - 隣接割当コブラとの端点距離（`>= 2.1 mm`）
 - `ics.cobraOps.CollisionSimulator` による **新規端点衝突 0 件 & 新規軌道衝突 0 件** の検証

@@ -22,10 +22,44 @@ from .cobra_reachability import (
 
 DEFAULT_FIDUCIAL_AVOID_MM = 2.9
 DEFAULT_MIN_COBRA_SEP_MM = 2.1
+DEFAULT_MIN_MAG = 18.0
 DEFAULT_PROPOSAL_ID: str | None = None
 DEFAULT_CAT_ID: int | None = None
 DEFAULT_OB_PREFIX = "rubin_"
 DEFAULT_NAME_SUFFIX = "_sn"
+
+ALL_LSST_BANDS = ["u", "g", "r", "i", "z", "y"]
+NJY_TO_AB_ZP = 31.4
+
+
+def _latest_science_mag(row: pd.Series) -> tuple[float | None, str]:
+    """Return (AB mag, band) of the latest positive scienceFlux detection across all bands."""
+    best_mjd = -np.inf
+    best_flux = np.nan
+    best_band = ""
+    for b in ALL_LSST_BANDS:
+        flux = row.get(f"scienceFlux_{b}", np.nan)
+        mjd = row.get(f"mjd_{b}", np.nan)
+        try:
+            fval = float(flux)
+            mval = float(mjd)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(fval) and fval > 0.0 and np.isfinite(mval) and mval > best_mjd:
+            best_mjd = mval
+            best_flux = fval
+            best_band = b
+    if best_band:
+        return float(-2.5 * np.log10(best_flux) + NJY_TO_AB_ZP), best_band
+    for col in ("science_mag", "psf_mag"):
+        val = row.get(col, np.nan)
+        try:
+            m = float(val)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(m):
+            return m, str(row.get("rep_band", row.get("r:band", "")))
+    return None, ""
 
 
 def _infer_science_metadata(orig: PfsDesign) -> tuple[int, str]:
@@ -252,6 +286,7 @@ def reassign_design_file(
     black_dot_radius_margin: float = DEFAULT_BLACK_DOT_MARGIN,
     fiducial_avoid_mm: float = DEFAULT_FIDUCIAL_AVOID_MM,
     min_cobra_sep_mm: float = DEFAULT_MIN_COBRA_SEP_MM,
+    min_mag: float | None = DEFAULT_MIN_MAG,
     max_per_design: int | None = None,
     allow_trajectory_collision: bool = False,
     dry_run: bool = False,
@@ -305,6 +340,24 @@ def reassign_design_file(
 
     for i, row in cands.iterrows():
         oid = int(row["diaObjectId"])
+        latest_mag, latest_band = _latest_science_mag(row)
+
+        if min_mag is not None and latest_mag is not None and latest_mag <= float(min_mag):
+            log_rows.append(
+                {
+                    "design_file": path.name,
+                    "design_name": orig.designName,
+                    "diaObjectId": oid,
+                    "status": "rejected",
+                    "assigned_fiber_id": np.nan,
+                    "assigned_cobra_id": np.nan,
+                    "latest_band": latest_band,
+                    "latest_mag": round(latest_mag, 3),
+                    "reason": f"too_bright ({latest_band}={latest_mag:.2f}mag <= {float(min_mag):.2f}mag)",
+                }
+            )
+            continue
+
         if max_per_design is not None and len(accepted) >= max_per_design:
             log_rows.append(
                 {
@@ -466,6 +519,8 @@ def reassign_design_file(
                     "status": "assigned",
                     "assigned_fiber_id": fid,
                     "assigned_cobra_id": cid,
+                    "latest_band": latest_band,
+                    "latest_mag": round(latest_mag, 3) if latest_mag is not None else np.nan,
                     "min_neighbor_sep_mm": round(min_sep, 3),
                     "min_fiducial_dist_mm": round(min_fid_dist, 3),
                     "reason": "ok",
@@ -592,6 +647,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Minimum endpoint separation from other cobras in mm (default: {DEFAULT_MIN_COBRA_SEP_MM}).",
     )
     parser.add_argument(
+        "--min-mag",
+        type=float,
+        default=DEFAULT_MIN_MAG,
+        help=(
+            f"Bright magnitude limit (AB mag, any band): transients whose latest detection "
+            f"is brighter than or equal to this value (mag <= --min-mag) are not assigned "
+            f"(default: {DEFAULT_MIN_MAG})."
+        ),
+    )
+    parser.add_argument(
         "--max-per-design",
         type=int,
         default=None,
@@ -658,6 +723,7 @@ def main(argv: list[str] | None = None) -> int:
             black_dot_radius_margin=args.black_dot_margin,
             fiducial_avoid_mm=args.fiducial_avoid_mm,
             min_cobra_sep_mm=args.min_cobra_sep_mm,
+            min_mag=args.min_mag,
             max_per_design=args.max_per_design,
             allow_trajectory_collision=args.allow_trajectory_collision,
             dry_run=args.dry_run,
